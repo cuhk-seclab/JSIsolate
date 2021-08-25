@@ -1,0 +1,74 @@
+diff --git a/renderer/render_frame_impl.cc b/renderer/render_frame_impl.cc
+index cf3e520..2a87849 100644
+--- a/renderer/render_frame_impl.cc
++++ b/renderer/render_frame_impl.cc
+@@ -228,6 +228,10 @@
+ #include "url/url_util.h"
+ #include "v8/include/v8.h"
+ 
++// JS Isolation
++#include <iostream>
++#include <fstream>
++
+ #if BUILDFLAG(ENABLE_PLUGINS)
+ #include "content/renderer/pepper/pepper_browser_connection.h"
+ #include "content/renderer/pepper/pepper_plugin_instance_impl.h"
+@@ -250,6 +254,8 @@
+ #include "third_party/blink/public/platform/web_float_point.h"
+ #endif
+ 
++#include "base/environment.h"
++
+ using base::Time;
+ using base::TimeDelta;
+ using blink::WebContentDecryptionModule;
+@@ -2412,7 +2418,7 @@ void RenderFrameImpl::OnJavaScriptExecuteRequestInIsolatedWorld(
+   JavaScriptIsolatedWorldRequest* request = new JavaScriptIsolatedWorldRequest(
+       id, notify_result, routing_id_, weak_factory_.GetWeakPtr());
+   frame_->RequestExecuteScriptInIsolatedWorld(
+-      world_id, &script, 1, false, WebLocalFrame::kSynchronous, request);
++      world_id, &script, 1, false, WebLocalFrame::kSynchronous, request); 
+ }
+ 
+ RenderFrameImpl::JavaScriptIsolatedWorldRequest::JavaScriptIsolatedWorldRequest(
+@@ -4004,7 +4010,6 @@ void RenderFrameImpl::FrameDetached(DetachType type) {
+   CHECK(it != g_frame_map.Get().end());
+   CHECK_EQ(it->second, this);
+   g_frame_map.Get().erase(it);
+-
+   // |frame_| may not be referenced after this, so clear the pointer since
+   // the actual WebLocalFrame may not be deleted immediately and other methods
+   // may try to access it.
+@@ -4636,6 +4641,32 @@ void RenderFrameImpl::DidFinishLoad() {
+   if (!RenderThreadImpl::current()->GetRendererMemoryMetrics(&memory_metrics))
+     return;
+   RecordSuffixedRendererMemoryMetrics(memory_metrics, ".DidFinishLoad");
++
++  char filename[128];
++  const char* pid = std::to_string(base::Process::Current().Pid()).c_str();
++  sprintf(filename, "%s.frame", pid);
++  std::ofstream f_out(filename, std::ios::app);
++  if(!f_out) {
++    if(IsMainFrame())
++      RecordSuffixedRendererMemoryMetrics(memory_metrics,
++                                      ".MainFrameDidFinishLoad");
++    return;
++  }
++
++  //base::Time current_time = base::Time::Now();
++  int64_t current_time = base::Time::Now().ToJavaTime();
++  std::string url = document_loader->GetRequest().Url().GetString().Ascii();
++  if(IsMainFrame()){
++    f_out << "[main] " << url << " " << current_time << "\n";
++  }
++  else{
++    f_out << "[sub] " << url << " " << current_time << "\n";
++  }
++  f_out.flush();
++  f_out.close();
++
++
++
+   if (!IsMainFrame())
+     return;
+   RecordSuffixedRendererMemoryMetrics(memory_metrics,

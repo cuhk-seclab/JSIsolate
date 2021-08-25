@@ -1,0 +1,152 @@
+diff --git a/public/renderer/BUILD.gn b/public/renderer/BUILD.gn
+index 91839cc..c8cfb1f 100644
+--- a/public/renderer/BUILD.gn
++++ b/public/renderer/BUILD.gn
+@@ -56,12 +56,8 @@ target(link_target_type, "renderer_sources") {
+     "plugin_instance_throttler.h",
+     "render_accessibility.h",
+     "render_frame.h",
+-    "render_frame_observer.cc",
+-    "render_frame_observer.h",
+     "render_frame_observer_tracker.h",
+     "render_frame_visitor.h",
+-    "render_thread.cc",
+-    "render_thread.h",
+     "render_thread_observer.cc",
+     "render_thread_observer.h",
+     "render_view.h",
+@@ -135,3 +131,15 @@ target(link_target_type, "renderer_sources") {
+     ]
+   }
+ }
++
++static_library("script_isolation") {
++  sources = [
++    "render_frame_observer.cc",
++    "render_frame_observer.h",
++    "render_thread.cc",
++    "render_thread.h",
++  ]
++  deps = [
++    "//content/public/common",
++  ]
++}
+diff --git a/renderer/BUILD.gn b/renderer/BUILD.gn
+index 0ec5a27..d5b57d5 100644
+--- a/renderer/BUILD.gn
++++ b/renderer/BUILD.gn
+@@ -504,8 +504,6 @@ target(link_target_type, "renderer") {
+     "push_messaging/push_messaging_client.h",
+     "push_messaging/push_provider.cc",
+     "push_messaging/push_provider.h",
+-    "render_frame_impl.cc",
+-    "render_frame_impl.h",
+     "render_frame_metadata_observer_impl.cc",
+     "render_frame_metadata_observer_impl.h",
+     "render_frame_proxy.cc",
+@@ -595,8 +593,6 @@ target(link_target_type, "renderer") {
+     "theme_helper_mac.mm",
+     "top_level_blame_context.cc",
+     "top_level_blame_context.h",
+-    "v8_value_converter_impl.cc",
+-    "v8_value_converter_impl.h",
+     "web_database_observer_impl.cc",
+     "web_database_observer_impl.h",
+     "web_ui_extension.cc",
+@@ -1032,6 +1028,22 @@ group("for_content_tests") {
+   }
+ }
+ 
++static_library("script_isolation") {
++  sources = [
++    "render_frame_impl.cc",
++    "render_frame_impl.h",
++    "v8_value_converter_impl.cc",
++    "v8_value_converter_impl.h",
++  ]
++  configs += [
++    "//content:content_implementation",
++  ]
++  deps = [
++    "//content/common",
++  ]
++}
++
++
+ fuzzer_test("audio_decoder_fuzzer") {
+   sources = [
+     "media/audio_decoder_fuzzer.cpp",
+diff --git a/renderer/render_frame_impl.cc b/renderer/render_frame_impl.cc
+index cf3e520..2a87849 100644
+--- a/renderer/render_frame_impl.cc
++++ b/renderer/render_frame_impl.cc
+@@ -228,6 +228,10 @@
+ #include "url/url_util.h"
+ #include "v8/include/v8.h"
+ 
++// JS Isolation
++#include <iostream>
++#include <fstream>
++
+ #if BUILDFLAG(ENABLE_PLUGINS)
+ #include "content/renderer/pepper/pepper_browser_connection.h"
+ #include "content/renderer/pepper/pepper_plugin_instance_impl.h"
+@@ -250,6 +254,8 @@
+ #include "third_party/blink/public/platform/web_float_point.h"
+ #endif
+ 
++#include "base/environment.h"
++
+ using base::Time;
+ using base::TimeDelta;
+ using blink::WebContentDecryptionModule;
+@@ -2412,7 +2418,7 @@ void RenderFrameImpl::OnJavaScriptExecuteRequestInIsolatedWorld(
+   JavaScriptIsolatedWorldRequest* request = new JavaScriptIsolatedWorldRequest(
+       id, notify_result, routing_id_, weak_factory_.GetWeakPtr());
+   frame_->RequestExecuteScriptInIsolatedWorld(
+-      world_id, &script, 1, false, WebLocalFrame::kSynchronous, request);
++      world_id, &script, 1, false, WebLocalFrame::kSynchronous, request, nullptr); 
+ }
+ 
+ RenderFrameImpl::JavaScriptIsolatedWorldRequest::JavaScriptIsolatedWorldRequest(
+@@ -4004,7 +4010,6 @@ void RenderFrameImpl::FrameDetached(DetachType type) {
+   CHECK(it != g_frame_map.Get().end());
+   CHECK_EQ(it->second, this);
+   g_frame_map.Get().erase(it);
+-
+   // |frame_| may not be referenced after this, so clear the pointer since
+   // the actual WebLocalFrame may not be deleted immediately and other methods
+   // may try to access it.
+@@ -4636,6 +4641,32 @@ void RenderFrameImpl::DidFinishLoad() {
+   if (!RenderThreadImpl::current()->GetRendererMemoryMetrics(&memory_metrics))
+     return;
+   RecordSuffixedRendererMemoryMetrics(memory_metrics, ".DidFinishLoad");
++
++  char filename[128];
++  const char* pid = std::to_string(base::Process::Current().Pid()).c_str();
++  sprintf(filename, "%s.frame", pid);
++  std::ofstream f_out(filename, std::ios::app);
++  if(!f_out) {
++    if(IsMainFrame())
++      RecordSuffixedRendererMemoryMetrics(memory_metrics,
++                                      ".MainFrameDidFinishLoad");
++    return;
++  }
++
++  //base::Time current_time = base::Time::Now();
++  int64_t current_time = base::Time::Now().ToJavaTime();
++  std::string url = document_loader->GetRequest().Url().GetString().Ascii();
++  if(IsMainFrame()){
++    f_out << "[main] " << url << " " << current_time << "\n";
++  }
++  else{
++    f_out << "[sub] " << url << " " << current_time << "\n";
++  }
++  f_out.flush();
++  f_out.close();
++
++
++
+   if (!IsMainFrame())
+     return;
+   RecordSuffixedRendererMemoryMetrics(memory_metrics,

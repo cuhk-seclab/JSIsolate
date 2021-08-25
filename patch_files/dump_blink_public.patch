@@ -1,0 +1,14 @@
+diff --git a/web_local_frame.h b/web_local_frame.h
+index 68b3ae21865f..fc15ed99d638 100644
+--- a/web_local_frame.h
++++ b/web_local_frame.h
+@@ -492,7 +492,8 @@ class WebLocalFrame : public WebFrame {
+       unsigned num_sources,
+       bool user_gesture,
+       ScriptExecutionType,
+-      WebScriptExecutionCallback*) = 0;
++      WebScriptExecutionCallback*, 
++      std::string host_id) = 0;
+ 
+   // Associates an isolated world with human-readable name which is useful for
+   // extension debugging.

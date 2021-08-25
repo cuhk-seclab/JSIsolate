@@ -1,0 +1,333 @@
+diff --git a/include/v8.h b/include/v8.h
+index a4bbe1b0..8bdb2ff8 100644
+--- a/include/v8.h
++++ b/include/v8.h
+@@ -1718,6 +1718,29 @@ class V8_EXPORT StackTrace {
+   int GetFrameCount() const;
+ 
+   /**
++   * Grab a snapshot of the current JavaScript execution stack,
++   * which only contains the top (newest) StackFrame.
++   *
++   * \param frame_limit The maximum number of stack frames we want to capture.
++   * \param options Enumerates the set of things we will capture for each
++   *   StackFrame.
++   */
++  static Local<StackTrace> TopFrameStackTrace(
++      Isolate* isolate, int frame_limit, StackTraceOptions options = kDetailed);
++
++  /**
++   * Grab a snapshot of the current JavaScript execution stack,
++   * which only contains the bottom (oldest) StackFrame.
++   *
++   * \param frame_limit The maximum number of stack frames we want to capture.
++   * \param options Enumerates the set of things we will capture for each
++   *   StackFrame.
++   */
++  static Local<StackTrace> BottomFrameStackTrace(
++      Isolate* isolate, int frame_limit, StackTraceOptions options = kDetailed);
++
++
++  /**
+    * Grab a snapshot of the current JavaScript execution stack.
+    *
+    * \param frame_limit The maximum number of stack frames we want to capture.
+@@ -4032,6 +4055,9 @@ class V8_EXPORT Function : public Object {
+    */
+   Local<Value> GetInferredName() const;
+ 
++  std::string GetScriptSource() const;
++  std::string GetFunctionSource() const;
++
+   /**
+    * displayName if it is set, otherwise name if it is configured, otherwise
+    * function name, otherwise inferred name.
+@@ -7441,6 +7467,8 @@ class V8_EXPORT Isolate {
+    */
+   static Isolate* GetCurrent();
+ 
++  uintptr_t GetNativeContextAddr();
++
+   /**
+    * Custom callback used by embedders to help V8 determine if it should abort
+    * when it throws and no internal handler is predicted to catch the
+diff --git a/src/api.cc b/src/api.cc
+index 3f62a23d..2b7b5391 100644
+--- a/src/api.cc
++++ b/src/api.cc
+@@ -2527,7 +2527,7 @@ MaybeLocal<Function> ScriptCompiler::CompileFunctionInContext(
+   RETURN_ESCAPED(Utils::CallableToLocal(result));
+ }
+ 
+-void ScriptCompiler::ScriptStreamingTask::Run() { data_->task->Run(); }
++void ScriptCompiler::ScriptStreamingTask::Run() { data_->task->Run(); } 
+ 
+ ScriptCompiler::ScriptStreamingTask* ScriptCompiler::StartStreamingScript(
+     Isolate* v8_isolate, StreamedSource* source, CompileOptions options) {
+@@ -2919,6 +2919,28 @@ int StackTrace::GetFrameCount() const {
+   return Utils::OpenHandle(this)->length();
+ }
+ 
++Local<StackTrace> StackTrace::TopFrameStackTrace(
++    Isolate* isolate,
++    int frame_limit,
++    StackTraceOptions options) {
++  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
++  ENTER_V8_NO_SCRIPT_NO_EXCEPTION(i_isolate);
++  i::Handle<i::FixedArray> stackTrace =
++      i_isolate->CaptureTopOrBottomFrameStackTrace(frame_limit, options, true);
++  return Utils::StackTraceToLocal(stackTrace);
++}
++
++
++Local<StackTrace> StackTrace::BottomFrameStackTrace(
++    Isolate* isolate,
++    int frame_limit,
++    StackTraceOptions options) {
++  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
++  ENTER_V8_NO_SCRIPT_NO_EXCEPTION(i_isolate);
++  i::Handle<i::FixedArray> stackTrace =
++      i_isolate->CaptureTopOrBottomFrameStackTrace(frame_limit, options, false);
++  return Utils::StackTraceToLocal(stackTrace);
++}
+ 
+ Local<StackTrace> StackTrace::CurrentStackTrace(
+     Isolate* isolate,
+@@ -5036,6 +5058,46 @@ void Function::SetName(v8::Local<v8::String> name) {
+   func->shared()->SetName(*Utils::OpenHandle(*name));
+ }
+ 
++std::string Function::GetScriptSource() const {
++  auto self = Utils::OpenHandle(this);
++  i::Isolate* isolate = self->GetIsolate();
++  if (!self->IsJSFunction()) {
++    return std::string(); 
++  }
++  auto func = i::Handle<i::JSFunction>::cast(self);
++  if (!func->shared()->script()->IsScript()) {
++    return std::string();
++  }
++  i::Handle<i::Script> script(i::Script::cast(func->shared()->script()),
++                              func->GetIsolate());
++  return std::string(i::Handle<i::String>(i::String::cast(script->source()), isolate)->ToCString().get()); 
++}
++
++std::string Function::GetFunctionSource() const {
++  auto self = Utils::OpenHandle(this);
++  i::Isolate* isolate = self->GetIsolate();
++  if (!self->IsJSFunction()) {
++    return std::string(); 
++  }
++  auto func = i::Handle<i::JSFunction>::cast(self);
++  i::Handle<i::SharedFunctionInfo> function_info(func->shared(), isolate);
++  i::Handle<i::Object> func_source = i::SharedFunctionInfo::GetSourceCode(function_info);
++  if(!func_source->IsString()) 
++    return std::string();
++  else {
++    i::Handle<i::String> func_source_str;
++    if(i::Object::ToString(isolate, func_source).ToHandle(&func_source_str)) {
++      std::string raw_source(func_source_str->ToCString().get());
++      if(!function_info->is_wrapped() and raw_source.find("()") == 0) {
++        raw_source.erase(0, 2).erase(0, raw_source.find_first_not_of(" ")); // remove head spaces and head '()'
++        raw_source.erase(0, raw_source.find_first_not_of("{")).erase(raw_source.find_last_not_of("}")+1); // remove head '{' and tail '}'
++      }
++      return raw_source;
++    }
++    else
++      return std::string();
++  }
++}
+ 
+ Local<Value> Function::GetName() const {
+   auto self = Utils::OpenHandle(this);
+@@ -8243,6 +8305,13 @@ void Isolate::DumpAndResetStats() {
+   isolate->DumpAndResetStats();
+ }
+ 
++uintptr_t Isolate::GetNativeContextAddr() {
++  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
++  return isolate->GetNativeContextAddr();
++}
++
++
++
+ void Isolate::DiscardThreadSpecificMetadata() {
+   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+   isolate->DiscardPerThreadDataForThisThread();
+diff --git a/src/call_stack_const.h b/src/call_stack_const.h
+new file mode 100644
+index 00000000..ddba5184
+--- /dev/null
++++ b/src/call_stack_const.h
+@@ -0,0 +1,23 @@
++#ifndef V8_CALL_STACK_CONST_H_
++#define V8_CALL_STACK_CONST_H_
++
++#include <iostream>
++#include <list>
++#include <tuple>
++#include "src/contexts.h"
++
++namespace v8 {
++
++static const size_t maxCallStackSizeToCapture = 200;
++static const v8::StackTrace::StackTraceOptions stackTraceOptions = static_cast<v8::StackTrace::StackTraceOptions> (
++        v8::StackTrace::kLineNumber
++      | v8::StackTrace::kColumnOffset
++      | v8::StackTrace::kScriptId
++      | v8::StackTrace::kScriptNameOrSourceURL
++      | v8::StackTrace::kFunctionName);
++
++static std::list<std::tuple<int,i::NativeContext*>> logged_script_ids;
++
++}
++
++#endif // V8_CALL_STACK_CONST_H_ 
+diff --git a/src/isolate.cc b/src/isolate.cc
+index 94033f44..7a063fbf 100644
+--- a/src/isolate.cc
++++ b/src/isolate.cc
+@@ -1003,6 +1003,82 @@ class CaptureStackTraceHelper {
+   Isolate* isolate_;
+ };
+ 
++
++
++Handle<FixedArray> Isolate::CaptureTopOrBottomFrameStackTrace(
++    int frame_limit, StackTrace::StackTraceOptions options, bool top) {
++  DisallowJavascriptExecution no_js(this);
++  CaptureStackTraceHelper helper(this);
++
++  // Ensure no negative values.
++  int limit = Max(frame_limit, 0);
++  Handle<FixedArray> stack_trace_elems = factory()->NewFixedArray(limit);
++
++  int frames_seen = 0;
++  StandardFrame* frame = NULL;
++  std::vector<StandardFrame*> JS_frames;
++  for (StackTraceFrameIterator it(this); !it.done() && (frames_seen < limit);
++       it.Advance()) {
++    frame = it.frame();
++    if (frame->is_java_script()) {
++      JS_frames.push_back(frame);
++      //if (top)
++        //break;
++    }
++  }
++  size_t num_JS_frames = JS_frames.size();
++  long k = num_JS_frames;
++  if (top)
++    k = -1;
++  StandardFrame* current_JS_frame = NULL;
++  while (true) {
++    if (top) {
++      if (static_cast<size_t>(k + 1) == num_JS_frames) break;
++      k++;
++    }
++    else {
++      if (k == 0) break;
++      k--;
++    }
++    // Set initial size to the maximum inlining level + 1 for the outermost
++    // function.
++    std::vector<FrameSummary> frames;
++    current_JS_frame = JS_frames[k];
++    if (!current_JS_frame)
++      continue;
++    current_JS_frame->Summarize(&frames);
++
++    size_t num_frames = frames.size();
++    long i = -1;
++    if (top)
++      i = num_frames;
++    while (true) {
++      if (top) {
++        if (i == 0) break;
++        i--;
++      }
++      else {
++        if (static_cast<size_t>(i + 1) == num_frames) break;
++        i++;
++      }
++      FrameSummary& frame = frames[i];
++      if (!frame.is_subject_to_debugging()) 
++        continue;
++      // Filter frames from other security contexts.
++      Handle<StackFrameInfo> new_frame_obj = helper.NewStackFrameObject(frame);
++      stack_trace_elems->set(frames_seen, *new_frame_obj);
++      frames_seen++;
++      break;
++    }
++    if (frames_seen > 0)
++      break;
++  }
++
++  stack_trace_elems->Shrink(this, frames_seen);
++  return stack_trace_elems;
++}
++
++
+ Handle<FixedArray> Isolate::CaptureCurrentStackTrace(
+     int frame_limit, StackTrace::StackTraceOptions options) {
+   DisallowJavascriptExecution no_js(this);
+@@ -2684,6 +2760,7 @@ Isolate::Isolate()
+       deferred_handles_head_(nullptr),
+       optimizing_compile_dispatcher_(nullptr),
+       stress_deopt_count_(0),
++      native_context_addr_(0),
+       force_slow_path_(false),
+       next_optimization_id_(0),
+ #if V8_SFI_HAS_UNIQUE_ID
+@@ -3407,6 +3484,22 @@ void Isolate::UnlinkDeferredHandles(DeferredHandles* deferred) {
+   }
+ }
+ 
++uintptr_t Isolate::GetNativeContextAddr() {
++  i::Context* context = this->context();
++  if (context == nullptr) return 0; 
++  i::Handle<i::Context> native_context_handle = i::Handle<i::Context>(context, this);
++
++  i::MaybeObject* maybe_object = const_cast<i::MaybeObject*>(Brief(*native_context_handle).value);
++  HeapObject* heap_object;
++  if(maybe_object->GetHeapObjectIfWeak(&heap_object)) {
++    return reinterpret_cast<i::Address>(heap_object);
++  }
++  else if(maybe_object->GetHeapObjectIfStrong(&heap_object)) {
++    return reinterpret_cast<i::Address>(heap_object);
++  }
++}
++
++
+ void Isolate::DumpAndResetStats() {
+   if (turbo_statistics() != nullptr) {
+     DCHECK(FLAG_turbo_stats || FLAG_turbo_stats_nvp);
+diff --git a/src/isolate.h b/src/isolate.h
+index ad124586..6da44ade 100644
+--- a/src/isolate.h
++++ b/src/isolate.h
+@@ -827,6 +827,8 @@ class Isolate : private HiddenFactory {
+                                         void* ptr4 = nullptr);
+   Handle<FixedArray> CaptureCurrentStackTrace(
+       int frame_limit, StackTrace::StackTraceOptions options);
++  Handle<FixedArray> CaptureTopOrBottomFrameStackTrace(
++    int frame_limit, StackTrace::StackTraceOptions options, bool top);
+   Handle<Object> CaptureSimpleStackTrace(Handle<JSReceiver> error_object,
+                                          FrameSkipMode mode,
+                                          Handle<Object> caller);
+@@ -1326,6 +1328,8 @@ class Isolate : private HiddenFactory {
+   CodeTracer* GetCodeTracer();
+ 
+   void DumpAndResetStats();
++  uintptr_t GetNativeContextAddr(); // {return native_context_addr_;}
++  //void SetNativeContextAddr(Handle<NativeContext> native_context);
+ 
+   FunctionEntryHook function_entry_hook() { return function_entry_hook_; }
+   void set_function_entry_hook(FunctionEntryHook function_entry_hook) {
+@@ -1814,6 +1818,7 @@ class Isolate : private HiddenFactory {
+ 
+   // Counts deopt points if deopt_every_n_times is enabled.
+   unsigned int stress_deopt_count_;
++  uintptr_t native_context_addr_;
+ 
+   bool force_slow_path_;
+ 

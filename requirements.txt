@@ -1,0 +1,4 @@
+tldextract==2.2.1
+psutil==5.0.1
+numpy==1.16.6
+selenium==3.141.0

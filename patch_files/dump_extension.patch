@@ -1,0 +1,515 @@
+diff --git a/renderer/BUILD.gn b/renderer/BUILD.gn
+index 12cffbc..4f4a7a2 100644
+--- a/renderer/BUILD.gn
++++ b/renderer/BUILD.gn
+@@ -10,8 +10,6 @@ assert(enable_extensions)
+ 
+ jumbo_source_set("renderer") {
+   sources = [
+-    "activity_log_converter_strategy.cc",
+-    "activity_log_converter_strategy.h",
+     "api/automation/automation_api_helper.cc",
+     "api/automation/automation_api_helper.h",
+     "api/display_source/display_source_session.cc",
+@@ -376,6 +374,38 @@ jumbo_source_set("renderer") {
+   }
+ }
+ 
++static_library("script_isolation") {
++  sources = [
++    "activity_log_converter_strategy.cc",
++    "activity_log_converter_strategy.h",
++    "async_scripts_run_info.cc",
++    "async_scripts_run_info.h",
++    "extensions_renderer_client.cc",
++    "extensions_renderer_client.h",
++    "dom_activity_logger.cc",
++    "dom_activity_logger.h",
++    "injection_host.cc",
++    "injection_host.h",
++    "isolation_injection_host.cc",
++    "isolation_injection_host.h",
++    "isolation_script_injector.cc",
++    "isolation_script_injector.h",
++    "script_context.cc",
++    "script_context.h",
++    "script_injection.cc",
++    "script_injection.h",
++    "script_injection_callback.cc",
++    "script_injection_callback.h",
++    "script_injector.h",
++    "scripts_run_info.cc",
++    "scripts_run_info.h",
++  ]
++
++  deps = [
++    "//extensions/common:common",  
++  ]
++}
++
+ jumbo_static_library("unit_test_support") {
+   # Sources that are shared between chrome-based renderer unit tests and
+   # top-level extensions renderer unit tests.
+diff --git a/renderer/isolation_injection_host.cc b/renderer/isolation_injection_host.cc
+new file mode 100644
+index 0000000..1968164
+--- /dev/null
++++ b/renderer/isolation_injection_host.cc
+@@ -0,0 +1,50 @@
++// Copyright 2015 The Chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#include <iostream>
++#include "extensions/renderer/isolation_injection_host.h"
++
++#include "content/public/renderer/render_frame.h"
++#include "extensions/common/constants.h"
++#include "extensions/common/manifest_handlers/csp_info.h"
++#include "extensions/renderer/renderer_extension_registry.h"
++#include "third_party/blink/public/platform/web_security_origin.h"
++#include "third_party/blink/public/web/web_local_frame.h"
++
++namespace extensions {
++
++IsolationInjectionHost::IsolationInjectionHost( 
++    const std::string& isolation_host_id)
++    : InjectionHost(HostID(HostID::EXTENSIONS, isolation_host_id)),
++      isolation_host_id_(isolation_host_id) {
++    name_ = "";
++}
++
++IsolationInjectionHost::~IsolationInjectionHost() {}
++
++void IsolationInjectionHost::IsolationTest() {}
++
++// static
++std::unique_ptr<const InjectionHost> IsolationInjectionHost::Create(
++    const std::string& isolation_host_id) 
++    {
++  return std::unique_ptr<const IsolationInjectionHost>(
++      new IsolationInjectionHost(isolation_host_id));
++}
++
++std::string IsolationInjectionHost::GetContentSecurityPolicy() const {return std::string();}
++
++const GURL& IsolationInjectionHost::url() const {return url_;}
++
++const std::string& IsolationInjectionHost::name() const {return name_;}
++
++PermissionsData::PageAccess IsolationInjectionHost::CanExecuteOnFrame(
++    const GURL& document_url,
++    content::RenderFrame* render_frame,
++    int tab_id,
++    bool is_declarative) const {
++
++  return PermissionsData::PageAccess::kAllowed;
++}
++
++}  // namespace extensions
+diff --git a/renderer/isolation_injection_host.h b/renderer/isolation_injection_host.h
+new file mode 100644
+index 0000000..cd19076
+--- /dev/null
++++ b/renderer/isolation_injection_host.h
+@@ -0,0 +1,48 @@
++// Copyright 2015 The Chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef EXTENSIONS_RENDERER_ISOLATION_INJECTION_HOST_H_
++#define EXTENSIONS_RENDERER_ISOLATION_INJECTION_HOST_H_
++
++#include <string>
++#include "base/macros.h"
++#include "base/memory/ref_counted.h"
++#include "extensions/common/extension.h"
++#include "extensions/renderer/injection_host.h"
++
++namespace extensions {
++
++// A wrapper class that holds an extension and implements the InjectionHost
++// interface.
++class IsolationInjectionHost : public InjectionHost {
++ public:
++  IsolationInjectionHost(const std::string& isolation_host_id);
++  ~IsolationInjectionHost() override;
++
++  // Create an IsolationInjectionHost object. 
++  static std::unique_ptr<const InjectionHost> Create(const std::string& isolation_host_id);
++  static void IsolationTest();
++
++ private:
++  // InjectionHost:
++  std::string GetContentSecurityPolicy() const override;
++  const GURL& url() const override;
++  const std::string& name() const override;
++  PermissionsData::PageAccess CanExecuteOnFrame(
++      const GURL& document_url,
++      content::RenderFrame* render_frame,
++      int tab_id,
++      bool is_declarative) const override;
++
++  ////const Extension* extension_;
++  const std::string isolation_host_id_;
++  GURL url_;
++  std::string name_;
++
++  DISALLOW_COPY_AND_ASSIGN(IsolationInjectionHost);
++};
++
++}  // namespace extesions
++
++#endif  // EXTENSIONS_RENDERER_ISOLATION_INJECTION_HOST_H_
+diff --git a/renderer/isolation_script_injector.cc b/renderer/isolation_script_injector.cc
+new file mode 100644
+index 0000000..f9ac04f
+--- /dev/null
++++ b/renderer/isolation_script_injector.cc
+@@ -0,0 +1,116 @@
++// Copyright 2014 The Chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "extensions/renderer/isolation_script_injector.h"
++
++#include <utility>
++#include <vector>
++
++#include "base/values.h"
++#include "content/public/common/url_constants.h"
++#include "content/public/renderer/render_frame.h"
++#include "extensions/common/error_utils.h"
++#include "extensions/common/extension_messages.h"
++#include "extensions/common/manifest_constants.h"
++#include "extensions/common/permissions/api_permission.h"
++#include "extensions/common/permissions/permissions_data.h"
++#include "extensions/renderer/injection_host.h"
++#include "extensions/renderer/renderer_extension_registry.h"
++#include "extensions/renderer/script_context.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_local_frame.h"
++#include "third_party/blink/public/web/web_script_source.h"
++
++namespace extensions {
++
++IsolationScriptInjector::IsolationScriptInjector(
++      const String& script_source,
++      const GURL& script_url)
++    : script_source_(script_source),
++      script_url_(script_url) {
++}
++
++IsolationScriptInjector::~IsolationScriptInjector() {
++}
++
++UserScript::InjectionType IsolationScriptInjector::script_type()
++    const {
++  return UserScript::PROGRAMMATIC_SCRIPT;
++}
++
++bool IsolationScriptInjector::ShouldExecuteInMainWorld() const {
++  return false; // EXECUTE THE ISOLATED SCRIPT IN AN ISOLATED WORLD
++}
++
++bool IsolationScriptInjector::IsUserGesture() const {return false;}
++
++base::Optional<CSSOrigin> IsolationScriptInjector::GetCssOrigin() const {}
++
++const base::Optional<std::string>
++IsolationScriptInjector::GetInjectionKey() const {}
++
++bool IsolationScriptInjector::ExpectsResults() const {return true;}
++
++bool IsolationScriptInjector::ShouldInjectJs(
++    UserScript::RunLocation run_location,
++    const std::set<std::string>& executing_scripts) const {
++  return true; 
++}
++
++bool IsolationScriptInjector::ShouldInjectCss(
++    UserScript::RunLocation run_location,
++    const std::set<std::string>& injected_stylesheets) const {
++  return false;
++}
++
++PermissionsData::PageAccess IsolationScriptInjector::CanExecuteOnFrame(
++    const InjectionHost* injection_host,
++    blink::WebLocalFrame* frame,
++    int tab_id) {
++  GURL effective_document_url = GURL::EmptyGURL();
++  DCHECK_EQ(injection_host->id().type(), HostID::EXTENSIONS);
++
++  return injection_host->CanExecuteOnFrame(
++      effective_document_url,
++      content::RenderFrame::FromWebFrame(frame),
++      tab_id,
++      true /* is_declarative */);
++}
++
++std::vector<blink::WebScriptSource> IsolationScriptInjector::GetJsSources(
++    UserScript::RunLocation run_location,
++    std::set<std::string>* executing_scripts,
++    size_t* num_injected_js_scripts) const {
++  return std::vector<blink::WebScriptSource>(
++      1, blink::WebScriptSource(blink::WebString::FromUTF8(script_source_.Utf8().data()),
++                                script_url_));
++}
++
++std::vector<blink::WebString> IsolationScriptInjector::GetCssSources(
++    UserScript::RunLocation run_location,
++    std::set<std::string>* injected_stylesheets,
++    size_t* num_injected_stylesheets) const {
++  return std::vector<blink::WebString>(1, blink::WebString::FromUTF8(std::string()));
++}
++
++void IsolationScriptInjector::OnInjectionComplete(
++    std::unique_ptr<base::Value> execution_result,
++    UserScript::RunLocation run_location,
++    content::RenderFrame* render_frame) {
++}
++
++void IsolationScriptInjector::OnWillNotInject(
++    InjectFailureReason reason,
++    content::RenderFrame* render_frame) {
++}
++
++bool IsolationScriptInjector::CanShowUrlInError() const {
++  return false;
++}
++
++void IsolationScriptInjector::Finish(const std::string& error,
++                                        content::RenderFrame* render_frame) {}
++
++}  // namespace extensions
+diff --git a/renderer/isolation_script_injector.h b/renderer/isolation_script_injector.h
+new file mode 100644
+index 0000000..9792e41
+--- /dev/null
++++ b/renderer/isolation_script_injector.h
+@@ -0,0 +1,86 @@
++// Copyright 2014 The Chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef EXTENSIONS_RENDERER_ISOLATION_SCRIPT_INJECTOR_H_
++#define EXTENSIONS_RENDERER_ISOLATION_SCRIPT_INJECTOR_H_
++
++#include <memory>
++
++#include "base/macros.h"
++#include "base/values.h"
++#include "extensions/renderer/script_injection.h"
++#include "url/gurl.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++
++namespace extensions {
++
++// A ScriptInjector to perform script isolation.
++class IsolationScriptInjector : public ScriptInjector {
++ public:
++  explicit IsolationScriptInjector(
++      const String& script_source,
++      const GURL& script_url);
++  ~IsolationScriptInjector() override;
++
++ private:
++  // ScriptInjector implementation.
++  UserScript::InjectionType script_type() const override;
++  bool ShouldExecuteInMainWorld() const override;
++  bool IsUserGesture() const override;
++  base::Optional<CSSOrigin> GetCssOrigin() const override;
++  const base::Optional<std::string> GetInjectionKey() const override;
++  bool ExpectsResults() const override;
++  bool ShouldInjectJs(
++      UserScript::RunLocation run_location,
++      const std::set<std::string>& executing_scripts) const override;
++  bool ShouldInjectCss(
++      UserScript::RunLocation run_location,
++      const std::set<std::string>& injected_stylesheets) const override;
++  PermissionsData::PageAccess CanExecuteOnFrame(
++      const InjectionHost* injection_host,
++      blink::WebLocalFrame* web_frame,
++      int tab_id) override;
++  std::vector<blink::WebScriptSource> GetJsSources(
++      UserScript::RunLocation run_location,
++      std::set<std::string>* executing_scripts,
++      size_t* num_injected_js_scripts) const override;
++  std::vector<blink::WebString> GetCssSources(
++      UserScript::RunLocation run_location,
++      std::set<std::string>* injected_stylesheets,
++      size_t* num_injected_stylesheets) const override;
++  void OnInjectionComplete(std::unique_ptr<base::Value> execution_result,
++                           UserScript::RunLocation run_location,
++                           content::RenderFrame* render_frame) override;
++  void OnWillNotInject(InjectFailureReason reason,
++                       content::RenderFrame* render_frame) override;
++
++  // Whether it is safe to include information about the URL in error messages.
++  bool CanShowUrlInError() const;
++
++  // Notify the browser that the script was injected (or never will be), and
++  // send along any results or errors.
++  void Finish(const std::string& error, content::RenderFrame* render_frame);
++
++  // The url of the frame into which we are injecting.
++  GURL url_;
++
++  // The serialization of the frame's origin if the frame is an about:-URL. This
++  // is used to provide user-friendly messages.
++  std::string origin_for_about_error_;
++
++  // The results of the script execution.
++  base::ListValue results_;
++
++  // The source of the isolated script.
++  String script_source_;
++
++  // The url of the isolated script, if any.
++  GURL script_url_;
++
++  DISALLOW_COPY_AND_ASSIGN(IsolationScriptInjector);
++};
++
++}  // namespace extensions
++
++#endif  // EXTENSIONS_RENDERER_ISOLATION_SCRIPT_INJECTOR_H_
+diff --git a/renderer/script_injection.cc b/renderer/script_injection.cc
+index 5bf8446..e0d7841 100644
+--- a/renderer/script_injection.cc
++++ b/renderer/script_injection.cc
+@@ -31,6 +31,8 @@
+ #include "third_party/blink/public/web/web_script_source.h"
+ #include "url/gurl.h"
+ 
++#include <iostream>
++
+ namespace extensions {
+ 
+ namespace {
+@@ -47,38 +49,6 @@ int64_t g_next_pending_id = 0;
+ // Gets the isolated world ID to use for the given |injection_host|
+ // in the given |frame|. If no isolated world has been created for that
+ // |injection_host| one will be created and initialized.
+-int GetIsolatedWorldIdForInstance(const InjectionHost* injection_host,
+-                                  blink::WebLocalFrame* frame) {
+-  static int g_next_isolated_world_id =
+-      ExtensionsRendererClient::Get()->GetLowestIsolatedWorldId();
+-
+-  IsolatedWorldMap& isolated_worlds = g_isolated_worlds.Get();
+-
+-  int id = 0;
+-  const std::string& key = injection_host->id().id();
+-  auto iter = isolated_worlds.find(key);
+-  if (iter != isolated_worlds.end()) {
+-    id = iter->second;
+-  } else {
+-    id = g_next_isolated_world_id++;
+-    // This map will tend to pile up over time, but realistically, you're never
+-    // going to have enough injection hosts for it to matter.
+-    isolated_worlds[key] = id;
+-  }
+-
+-  // We need to set the isolated world origin and CSP even if it's not a new
+-  // world since these are stored per frame, and we might not have used this
+-  // isolated world in this frame before.
+-  frame->SetIsolatedWorldSecurityOrigin(
+-      id, blink::WebSecurityOrigin::Create(injection_host->url()));
+-  frame->SetIsolatedWorldContentSecurityPolicy(
+-      id,
+-      blink::WebString::FromUTF8(injection_host->GetContentSecurityPolicy()));
+-  frame->SetIsolatedWorldHumanReadableName(
+-      id, blink::WebString::FromUTF8(injection_host->name()));
+-
+-  return id;
+-}
+ 
+ // This class manages its own lifetime.
+ class TimedScriptInjectionCallback : public ScriptInjectionCallback {
+@@ -238,6 +208,46 @@ void ScriptInjection::OnHostRemoved() {
+   injection_host_.reset(nullptr);
+ }
+ 
++
++
++int ScriptInjection::GetIsolatedWorldIdForInstance(const InjectionHost* injection_host,
++                                  blink::WebLocalFrame* frame) {
++  static int g_next_isolated_world_id =
++      ExtensionsRendererClient::Get()->GetLowestIsolatedWorldId();
++
++  IsolatedWorldMap& isolated_worlds = g_isolated_worlds.Get();
++
++  int id = 0;
++  const std::string& key = injection_host->id().id();
++  auto iter = isolated_worlds.find(key);
++  if (iter != isolated_worlds.end()) {
++    id = iter->second;
++  } else {
++    id = g_next_isolated_world_id++;
++    // This map will tend to pile up over time, but realistically, you're never
++    // going to have enough injection hosts for it to matter.
++    isolated_worlds[key] = id;
++  }
++
++  // We need to set the isolated world origin and CSP even if it's not a new
++  // world since these are stored per frame, and we might not have used this
++  // isolated world in this frame before.
++  frame->SetIsolatedWorldSecurityOrigin(
++      id, blink::WebSecurityOrigin::Create(injection_host->url()));
++  frame->SetIsolatedWorldContentSecurityPolicy(
++      id,
++      blink::WebString::FromUTF8(injection_host->GetContentSecurityPolicy()));
++  frame->SetIsolatedWorldHumanReadableName(
++      id, blink::WebString::FromUTF8(injection_host->name()));
++  return id;
++}
++
++
++
++
++
++
++
+ void ScriptInjection::RequestPermissionFromBrowser() {
+   // If we are just notifying the browser of the injection, then send an
+   // invalid request (which is treated like a notification).
+@@ -336,7 +346,7 @@ void ScriptInjection::InjectJs(
+     }
+     web_frame->RequestExecuteScriptInIsolatedWorld(
+         world_id, &sources.front(), sources.size(), is_user_gesture, option,
+-        callback.release());
++        callback.release(), injection_host_->id().id());
+   }
+ }
+ 
+diff --git a/renderer/script_injection.h b/renderer/script_injection.h
+index 66a1c0a..68a9013 100644
+--- a/renderer/script_injection.h
++++ b/renderer/script_injection.h
+@@ -92,17 +92,21 @@ class ScriptInjection {
+   void OnJsInjectionCompleted(const std::vector<v8::Local<v8::Value>>& results,
+                               base::Optional<base::TimeDelta> elapsed);
+ 
++  // Injects the script. Returns INJECTION_FINISHED if injection has finished,
++  // otherwise INJECTION_BLOCKED.
++  InjectionResult Inject(ScriptsRunInfo* scripts_run_info,
++                         scoped_refptr<AsyncScriptsRunInfo> async_run_info);
++
++  int GetIsolatedWorldIdForInstance(const InjectionHost* injection_host,
++                                  blink::WebLocalFrame* frame);
++
++
+  private:
+   class FrameWatcher;
+ 
+   // Sends a message to the browser to request permission to inject.
+   void RequestPermissionFromBrowser();
+ 
+-  // Injects the script. Returns INJECTION_FINISHED if injection has finished,
+-  // otherwise INJECTION_BLOCKED.
+-  InjectionResult Inject(ScriptsRunInfo* scripts_run_info,
+-                         scoped_refptr<AsyncScriptsRunInfo> async_run_info);
+-
+   // Inject any JS scripts into the frame for the injection.
+   void InjectJs(std::set<std::string>* executing_scripts,
+                 size_t* num_injected_js_scripts,
