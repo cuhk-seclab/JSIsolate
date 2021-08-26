@@ -59,7 +59,7 @@ index 62c993e3..7642ef15 100644
 +  String frameSourceURL = toCoreStringOrDefault(frame->GetScriptNameOrSourceURL(), "<anonymous>");
 +  const KURL callerSourceURL = KURL(frameSourceURL);
 +
-+  if(!IsChromeURL(callerSourceURL.Protocol()) && !IsExtensionURL(callerSourceURL.Protocol())) {
++  if (callerSourceURL.GetString().IsEmpty() || (!IsChromeURL(callerSourceURL.Protocol()) && !IsExtensionURL(callerSourceURL.Protocol()))) {
 +    int scriptID = frame->GetScriptId();
 +    document->setScriptID2URL(scriptID, frameSourceURL); 
 +    initiator.append(String::Number(scriptID));
@@ -574,7 +574,7 @@ index 01501bfc..905dd1c1 100644
  
  }  // namespace blink
 diff --git a/bindings/core/v8/v8_script_runner.cc b/bindings/core/v8/v8_script_runner.cc
-index 695d6b77..71456283 100644
+index 695d6b77..811c6771 100644
 --- a/bindings/core/v8/v8_script_runner.cc
 +++ b/bindings/core/v8/v8_script_runner.cc
 @@ -47,6 +47,12 @@
@@ -590,24 +590,8 @@ index 695d6b77..71456283 100644
  namespace blink {
  
  namespace {
-@@ -285,9 +291,30 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::RunCompiledScript(
-     // ToCoreString here should be zero copy due to externalized string
-     // unpacked.
+@@ -287,7 +293,14 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::RunCompiledScript(
      probe::ExecuteScript probe(context, ToCoreString(script_url));
-+    int scriptID = script->GetUnboundScript()->GetId();
-+    if(!context->getHostId().empty()) {
-+      if(context->IsDocument()) {
-+        To<Document>(context)->setScriptID2HostID(scriptID, context->getHostId());
-+        To<Document>(context)->setInitiator2WorldID(scriptID, String(context->getHostId().c_str()));
-+      }
-+    }
-+    else {
-+      if(context->IsDocument()) {
-+        To<Document>(context)->setScriptID2HostID(scriptID, std::string("1"));
-+        To<Document>(context)->setInitiator2WorldID(scriptID, String("1"));
-+      }
-+    }
-+
      result = script->Run(isolate->GetCurrentContext());
    }
 -
@@ -622,7 +606,7 @@ index 695d6b77..71456283 100644
    CHECK(!isolate->IsDead());
    return result;
  }
-@@ -323,6 +350,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CompileAndRunInternalScript(
+@@ -323,6 +336,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CompileAndRunInternalScript(
    v8::Isolate::SafeForTerminationScope safe_for_termination(isolate);
    v8::MicrotasksScope microtasks_scope(
        isolate, v8::MicrotasksScope::kDoNotRunMicrotasks);
@@ -630,7 +614,7 @@ index 695d6b77..71456283 100644
    v8::MaybeLocal<v8::Value> result = script->Run(isolate->GetCurrentContext());
    CHECK(!isolate->IsDead());
    return result;
-@@ -402,8 +430,8 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallFunction(
+@@ -402,8 +416,8 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallFunction(
    probe::CallFunction probe(context, function, depth);
    v8::MaybeLocal<v8::Value> result =
        function->Call(isolate->GetCurrentContext(), receiver, argc, args);

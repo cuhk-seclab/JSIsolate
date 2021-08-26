@@ -285,18 +285,6 @@ index 9cd55701..3a771dd2 100644
   private:
    // Returns true if |accessingWindow| is allowed named access to |targetWindow|
    // because they're the same origin.  Note that named access should be allowed
-diff --git a/bindings/core/v8/js_based_event_listener.cc b/bindings/core/v8/js_based_event_listener.cc
-index 8a01fe1b..66606f22 100644
---- a/bindings/core/v8/js_based_event_listener.cc
-+++ b/bindings/core/v8/js_based_event_listener.cc
-@@ -12,6 +12,7 @@
- #include "third_party/blink/renderer/core/dom/events/event_target.h"
- #include "third_party/blink/renderer/platform/instance_counters.h"
- 
-+
- namespace blink {
- 
- JSBasedEventListener::JSBasedEventListener(ListenerType listener_type)
 diff --git a/bindings/core/v8/js_event_handler.cc b/bindings/core/v8/js_event_handler.cc
 index 022c4e3c..35b229b1 100644
 --- a/bindings/core/v8/js_event_handler.cc
@@ -707,19 +695,6 @@ index 01501bfc..50d500e9 100644
  };
  
  }  // namespace blink
-diff --git a/bindings/core/v8/script_module.cc b/bindings/core/v8/script_module.cc
-index 3fdc21bd..927556c3 100644
---- a/bindings/core/v8/script_module.cc
-+++ b/bindings/core/v8/script_module.cc
-@@ -75,7 +75,7 @@ ScriptValue ScriptModule::Instantiate(ScriptState* script_state) {
- 
- ScriptValue ScriptModule::Evaluate(ScriptState* script_state) const {
-   v8::Isolate* isolate = script_state->GetIsolate();
--
-+  
-   // Isolate exceptions that occur when executing the code. These exceptions
-   // should not interfere with javascript code we might evaluate from C++ when
-   // returning from here.
 diff --git a/bindings/core/v8/v8_script_runner.cc b/bindings/core/v8/v8_script_runner.cc
 index 695d6b77..9d4cce02 100644
 --- a/bindings/core/v8/v8_script_runner.cc
@@ -1350,18 +1325,6 @@ index b0e5543c..1a1e319d 100644
  {# Post-call #}
  {% if method.is_raises_exception %}
  if (exceptionState.HadException()) {
-diff --git a/controller/dev_tools_frontend_impl.cc b/controller/dev_tools_frontend_impl.cc
-index 8ac71929..60e2c196 100644
---- a/controller/dev_tools_frontend_impl.cc
-+++ b/controller/dev_tools_frontend_impl.cc
-@@ -77,6 +77,7 @@ void DevToolsFrontendImpl::DidClearWindowObject() {
-     ScriptState* script_state = ToScriptStateForMainWorld(GetSupplementable());
-     DCHECK(script_state);
-     ScriptState::Scope scope(script_state);
-+
-     if (devtools_host_)
-       devtools_host_->DisconnectClient();
-     devtools_host_ = DevToolsHost::Create(this, GetSupplementable());
 diff --git a/core/dom/BUILD.gn b/core/dom/BUILD.gn
 index a2dbb332..0a935d77 100644
 --- a/core/dom/BUILD.gn

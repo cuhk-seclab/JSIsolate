@@ -6,11 +6,11 @@ In the released version, JSIsolate only isolate scripts in the main frames to im
 
 JSIsolate is implemented on Chromium (version 71.0.3578.98) and has been tested on Debian 9.11 (stretch).
 
-The repository has been archived [here](https://zenodo.org/record/5256913), with a DOI of __10.5281/zenodo.5256913__.
+The repository has been archived [here](https://zenodo.org/record/5268831), with a DOI of __10.5281/zenodo.5268831__.
 
 ## Setup
 
-Step 1: Set up the _binaries_ folder. We release the compiled binaries [here](https://zenodo.org/record/5255066), with a DOI of __10.5281/zenodo.5255066__. Please download the *.zip files, create a _binaries_ folder in the root folder, and put the unzipped folders in the _binaries_ folder first. The resulting directory should follow a structure of:
+Step 1: Set up the _binaries_ folder. We release the compiled binaries [here](https://zenodo.org/record/5266469), with a DOI of __10.5281/zenodo.5266469__. Please download the *.zip files, create a _binaries_ folder in the root folder, and put the unzipped folders in the _binaries_ folder first. The resulting directory should follow a structure of:
 
 fse21-jsisolate-artifact/\
 |
